@@ -1,0 +1,14 @@
+# This project lives in a folder whose name contains a space ("Acc Manager").
+# The GNU toolchain's windres splits that path when compiling the Windows
+# resource file, so builds fail. Keeping the target directory at a space-free
+# path works around it. Point this wherever you like, as long as it has no
+# spaces in it.
+[build]
+target-dir = "C:/Users/jrroa/acc-manager-target"
+
+# rustc's incremental cache for this crate got poisoned and every incremental
+# build died with an internal compiler error in `generics_of(http::request)`.
+# A full rebuild of this crate takes ~15 s, so turning it off here is cheaper
+# than debugging the compiler.
+[profile.dev]
+incremental = false

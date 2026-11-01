@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 300" width="1160" height="300" fill="none">
+  <g transform="translate(10 30) scale(0.235)">
+    <rect width="1024" height="1024" rx="232" fill="#121316" />
+    <path d="M306 786 L512 262 L718 786" stroke="#f4f5f7" stroke-width="128" stroke-linecap="butt" stroke-linejoin="miter" fill="none" />
+    <path d="M344 634 H680" stroke="#ff6a4d" stroke-width="104" stroke-linecap="butt" fill="none" />
+  </g>
+
+  <text
+    x="292"
+    y="170"
+    fill="#f2f3f5"
+    font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+    font-size="118"
+    font-weight="800"
+    letter-spacing="-4"
+  >Stable<tspan fill="#ff6a4d">Alt</tspan></text>
+  <text
+    x="296"
+    y="212"
+    fill="#8a8f99"
+    font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+    font-size="24"
+    font-weight="600"
+    letter-spacing="7"
+  >ACCOUNT MANAGER</text>
+</svg>

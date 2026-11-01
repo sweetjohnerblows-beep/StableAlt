@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" fill="none">
+  <rect width="1024" height="1024" rx="232" fill="#121316" />
+
+  <!-- A, drawn as one continuous stroke so the apex stays sharp -->
+  <path
+    d="M306 786 L512 262 L718 786"
+    stroke="#f4f5f7"
+    stroke-width="128"
+    stroke-linecap="butt"
+    stroke-linejoin="miter"
+    fill="none"
+  />
+
+  <!-- Crossbar, the only coloured element -->
+  <path d="M344 634 H680" stroke="#ff6a4d" stroke-width="104" stroke-linecap="butt" fill="none" />
+</svg>

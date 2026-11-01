@@ -1,0 +1,22 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local tooling
+.freebuff/
+.cloud-attachments/
+
+# Marketing/video tooling and UI screenshots: not part of the app
+# or its build, and they carry a watermark.
+trailer/
+assets/preview-*.png
+
+# Never commit account data, vaults or logs
+*.vault
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+*.log

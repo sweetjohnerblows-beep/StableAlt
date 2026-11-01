@@ -1,0 +1,35 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+# Desktop only. `cdylib` is only needed for the mobile targets, and on the
+# Windows GNU toolchain it overflows the DLL export table ("export ordinal too
+# large") once the dependency graph is this big.
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-log = "2"
+base64 = "0.22"
+argon2 = "0.5"
+aes-gcm = "0.10"
+uuid = { version = "1.29.0", features = ["v4"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+png = "0.17"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
