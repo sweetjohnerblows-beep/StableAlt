@@ -1,4 +1,6 @@
 import { useState } from "react";
+import type { Theme } from "../themes";
+import { ThemeStudio } from "./ThemeStudio";
 
 const FPS_CHOICES: (number | null)[] = [null, 30, 60, 144];
 
@@ -16,6 +18,11 @@ type Props = {
   antiAfk: boolean;
   onToggleAntiAfk: () => void;
   fpsCap: number | null;
+  theme: Theme;
+  customThemes: Theme[];
+  onChooseTheme: (theme: Theme) => void;
+  onSaveTheme: (theme: Theme) => void;
+  onDeleteTheme: (id: string) => void;
   busy: string | null;
   activePreset: string | null;
   onApplyPreset: (id: string) => void;
@@ -61,6 +68,11 @@ export function SettingsView({
   antiAfk,
   onToggleAntiAfk,
   fpsCap,
+  theme,
+  customThemes,
+  onChooseTheme,
+  onSaveTheme,
+  onDeleteTheme,
   busy,
   activePreset,
   onApplyPreset,
@@ -85,6 +97,14 @@ export function SettingsView({
 
   return (
     <div className="settings">
+      <ThemeStudio
+        theme={theme}
+        customThemes={customThemes}
+        onChooseTheme={onChooseTheme}
+        onSaveTheme={onSaveTheme}
+        onDeleteTheme={onDeleteTheme}
+      />
+
       <section className="settings-card">
         <header className="settings-head">
           <h2>Performance</h2>

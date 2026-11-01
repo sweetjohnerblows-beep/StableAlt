@@ -13,6 +13,7 @@ import { MonitorView } from "./components/MonitorView";
 import { Onboarding } from "./components/Onboarding";
 import { RecookieDialog } from "./components/RecookieDialog";
 import { SettingsView } from "./components/SettingsView";
+import { DEFAULT_THEME, apply as applyTheme, type Theme } from "./themes";
 import { Splash } from "./components/Splash";
 
 type Toast = { kind: "ok" | "error"; text: string };
@@ -81,6 +82,13 @@ export default function App() {
       alive = false;
     };
   }, []);
+
+  // Paint the theme as soon as preferences arrive, and again whenever it changes.
+  // Everything on screen is driven by custom properties, so this is the only
+  // place a theme has to be applied.
+  useEffect(() => {
+    applyTheme(prefs?.theme ?? DEFAULT_THEME);
+  }, [prefs?.theme]);
 
   useEffect(() => {
     if (!toast) return;
@@ -519,6 +527,31 @@ export default function App() {
     }
   }
 
+  async function chooseTheme(theme: Theme) {
+    try {
+      setPrefs(await api.themeSet(theme));
+    } catch (err) {
+      setToast({ kind: "error", text: message(err) });
+    }
+  }
+
+  async function saveTheme(theme: Theme) {
+    try {
+      setPrefs(await api.themeSaveCustom(theme));
+      setToast({ kind: "ok", text: `${theme.name} saved and applied.` });
+    } catch (err) {
+      setToast({ kind: "error", text: message(err) });
+    }
+  }
+
+  async function deleteTheme(id: string) {
+    try {
+      setPrefs(await api.themeDeleteCustom(id));
+    } catch (err) {
+      setToast({ kind: "error", text: message(err) });
+    }
+  }
+
   async function toggleAntiAfk() {
     const next = !antiAfk;
     setBusy("afk");
@@ -748,6 +781,11 @@ export default function App() {
                       : null
               }
               onApplyPreset={applyPreset}
+              theme={prefs.theme ?? DEFAULT_THEME}
+              customThemes={prefs.custom_themes ?? []}
+              onChooseTheme={chooseTheme}
+              onSaveTheme={saveTheme}
+              onDeleteTheme={deleteTheme}
               onLock={lock}
             />
           )}

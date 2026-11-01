@@ -6,6 +6,59 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// A colour scheme, stored as the seven colours a user actually picks.
+///
+/// Deliberately not the whole stylesheet: every other variable is derived from
+/// these on the front end, so a saved theme can never leave one surface on the
+/// old palette.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Theme {
+    pub id: String,
+    pub name: String,
+    pub bg: String,
+    pub panel: String,
+    pub line: String,
+    pub text: String,
+    pub muted: String,
+    pub accent: String,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            id: "ember".to_string(),
+            name: "Ember".to_string(),
+            bg: "#06070a".to_string(),
+            panel: "#0d1015".to_string(),
+            line: "#1c212a".to_string(),
+            text: "#f1f3f7".to_string(),
+            muted: "#6f7889".to_string(),
+            accent: "#ff6a4d".to_string(),
+        }
+    }
+}
+
+/// Every colour must be a `#rgb`, `#rrggbb` or `#rrggbbaa` string. Anything else
+/// would be written straight into a CSS variable, so it is rejected here rather
+/// than trusted from the window.
+pub fn is_valid(theme: &Theme) -> bool {
+    fn hex(value: &str) -> bool {
+        let Some(digits) = value.strip_prefix('#') else {
+            return false;
+        };
+        matches!(digits.len(), 3 | 6 | 8) && digits.chars().all(|c| c.is_ascii_hexdigit())
+    }
+
+    hex(&theme.bg)
+        && hex(&theme.panel)
+        && hex(&theme.line)
+        && hex(&theme.text)
+        && hex(&theme.muted)
+        && hex(&theme.accent)
+        && !theme.id.trim().is_empty()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Prefs {
@@ -19,6 +72,10 @@ pub struct Prefs {
     pub monitor_sessions: bool,
     /// Poke idle clients so Roblox doesn't kick them for being away.
     pub anti_afk: bool,
+    /// The colour scheme in use.
+    pub theme: Theme,
+    /// Themes the user built themselves, in the order they were saved.
+    pub custom_themes: Vec<Theme>,
 }
 
 impl Default for Prefs {
@@ -30,6 +87,8 @@ impl Default for Prefs {
             fps_cap: Some(60),
             monitor_sessions: true,
             anti_afk: false,
+            theme: Theme::default(),
+            custom_themes: Vec::new(),
         }
     }
 }

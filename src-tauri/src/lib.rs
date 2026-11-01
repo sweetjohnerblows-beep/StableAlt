@@ -1060,6 +1060,56 @@ async fn prefs_get(app: tauri::AppHandle) -> Result<prefs::Prefs, String> {
     Ok(prefs::load(&prefs_path(&app)?))
 }
 
+/// Switches theme. Presets and saved themes go through the same check, because
+/// the colour strings end up in CSS variables.
+#[tauri::command]
+async fn theme_set(app: tauri::AppHandle, theme: prefs::Theme) -> Result<prefs::Prefs, String> {
+    if !prefs::is_valid(&theme) {
+        return Err("That theme has a colour that isn't a hex value like #ff6a4d.".to_string());
+    }
+
+    let path = prefs_path(&app)?;
+    let mut saved = prefs::load(&path);
+    saved.theme = theme;
+    prefs::save(&saved, &path)?;
+    Ok(saved)
+}
+
+/// Saves a theme the user built, replacing any earlier one with the same id, and
+/// switches to it so the window and the file never disagree.
+#[tauri::command]
+async fn theme_save_custom(
+    app: tauri::AppHandle,
+    theme: prefs::Theme,
+) -> Result<prefs::Prefs, String> {
+    if !prefs::is_valid(&theme) {
+        return Err("That theme has a colour that isn't a hex value like #ff6a4d.".to_string());
+    }
+
+    let path = prefs_path(&app)?;
+    let mut saved = prefs::load(&path);
+    match saved.custom_themes.iter_mut().find(|t| t.id == theme.id) {
+        Some(existing) => *existing = theme.clone(),
+        None => saved.custom_themes.push(theme.clone()),
+    }
+    saved.theme = theme;
+    prefs::save(&saved, &path)?;
+    Ok(saved)
+}
+
+/// Drops a saved theme. If it was the one in use, Ember takes over.
+#[tauri::command]
+async fn theme_delete_custom(app: tauri::AppHandle, id: String) -> Result<prefs::Prefs, String> {
+    let path = prefs_path(&app)?;
+    let mut saved = prefs::load(&path);
+    saved.custom_themes.retain(|theme| theme.id != id);
+    if saved.theme.id == id {
+        saved.theme = prefs::Theme::default();
+    }
+    prefs::save(&saved, &path)?;
+    Ok(saved)
+}
+
 /// Turns the background session monitor on or off.
 #[tauri::command]
 async fn session_monitor_set(
@@ -1219,6 +1269,9 @@ pub fn run() {
             low_memory_get,
             low_memory_set,
             prefs_get,
+            theme_set,
+            theme_save_custom,
+            theme_delete_custom,
             onboarding_done,
             fps_cap_set,
             friends_list,

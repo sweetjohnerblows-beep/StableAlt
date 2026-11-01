@@ -78,12 +78,26 @@ export type BulkResult = {
   accounts: Account[];
 };
 
+/** The seven colours a theme stores; the rest of the palette is derived. */
+export type Theme = {
+  id: string;
+  name: string;
+  bg: string;
+  panel: string;
+  line: string;
+  text: string;
+  muted: string;
+  accent: string;
+};
+
 export type Prefs = {
   multi_instance: boolean;
   multi_instance_asked: boolean;
   fps_cap: number | null;
   monitor_sessions: boolean;
   anti_afk: boolean;
+  theme: Theme;
+  custom_themes: Theme[];
 };
 
 export const api = {
@@ -133,6 +147,9 @@ export const api = {
   prefs: () => invoke<Prefs>("prefs_get"),
   onboardingDone: (enabled: boolean) => invoke<Prefs>("onboarding_done", { enabled }),
   setFpsCap: (cap: number | null) => invoke<Prefs>("fps_cap_set", { cap }),
+  themeSet: (theme: Theme) => invoke<Prefs>("theme_set", { theme }),
+  themeSaveCustom: (theme: Theme) => invoke<Prefs>("theme_save_custom", { theme }),
+  themeDeleteCustom: (id: string) => invoke<Prefs>("theme_delete_custom", { id }),
   friendRequests: (id: string) => invoke<FriendRequest[]>("friends_list", { id }),
   friendAccept: (id: string, userId: number) => invoke<void>("friend_accept", { id, userId }),
   friendDecline: (id: string, userId: number) => invoke<void>("friend_decline", { id, userId }),
