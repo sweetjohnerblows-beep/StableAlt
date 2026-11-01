@@ -1,10 +1,35 @@
 # StableAlt
 
-A local, encrypted Roblox account manager for Windows. Add your accounts, give each one its own
-game and launch options, and run several clients side by side without them eating your machine.
+Run several Roblox accounts at once on Windows — each with its own game, its own graphics and its
+own window — from an encrypted vault that never leaves your PC.
 
-Everything lives on your PC in an encrypted vault tied to your Windows account. There is no
-server, no sign-in, and no telemetry.
+**[Download the installer](https://github.com/sweetjohnerblows-beep/StableAlt/releases/latest)** ·
+free · no account to create · no telemetry · ~6 MB · Windows 10/11
+
+Multi-instance still works in 2026, on current Roblox builds. That is the whole point of this app:
+other methods stopped working when Roblox started guarding the client, and the tools that survived
+cost you memory for every extra window.
+
+Everything lives on your PC in an encrypted vault tied to your Windows account. There is no server
+and no sign-in.
+
+## Install
+
+1. Download **`StableAlt_0.1.0_x64-setup.exe`** from the link above.
+2. Windows will show **"Windows protected your PC"**. That is because this build has no paid code
+   signing certificate, not because anything was detected. Click **More info → Run anyway**.
+3. Pick a master password. That password encrypts your vault and is never sent anywhere — if you
+   lose it, the vault is gone.
+
+Check what you downloaded if you want to be sure it is the file I built:
+
+```bash
+sha256sum StableAlt_0.1.0_x64-setup.exe
+# compare against SHA256SUMS.txt on the release page
+```
+
+You are trusting a binary here, so do not take my word for it: the whole thing is in this repo and
+builds from source with the commands under [Building](#building).
 
 ## What it does
 
@@ -35,6 +60,12 @@ server, no sign-in, and no telemetry.
 
 **Friends**
 - See incoming and outgoing requests per account, accept, decline or cancel
+
+## Who this is for
+
+People running more than one Roblox account on one PC — alts, storage accounts, group holders,
+trading mules, or a main plus a few clients parked in a game overnight. If you only ever play one
+account, you do not need this.
 
 ## Building
 
