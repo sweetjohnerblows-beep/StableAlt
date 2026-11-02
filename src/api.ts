@@ -22,6 +22,10 @@ export type Account = {
   use_global_perf: boolean;
   low_graphics: boolean;
   fps_cap: number | null;
+  /** Where this account was last sent, so it can go back to that server. */
+  last_place: number | null;
+  last_job: string | null;
+  last_job_at: string | null;
 };
 
 export type PlaceInfo = {
@@ -41,6 +45,17 @@ export type ClientWindow = {
   account_id: string | null;
   /** The place this client is actually in, when Roblox's log says. */
   place_id: number | null;
+  /** The server that client is in, from the same log line. */
+  job_id: string | null;
+};
+
+/** One public server of a place, as the server picker shows it. */
+export type GameServer = {
+  job_id: string;
+  playing: number;
+  max_players: number;
+  fps: number | null;
+  ping: number | null;
 };
 
 export type LaunchConfig = {
@@ -78,6 +93,19 @@ export type BulkResult = {
   accounts: Account[];
 };
 
+export type BackupExport = {
+  path: string;
+  accounts: number;
+};
+
+export type BackupImport = {
+  added: number;
+  skipped: number;
+  /** The file wants a different master password than the open vault. */
+  needs_password: boolean;
+  accounts: Account[];
+};
+
 /** The seven colours a theme stores; the rest of the palette is derived. */
 export type Theme = {
   id: string;
@@ -96,6 +124,8 @@ export type Prefs = {
   fps_cap: number | null;
   monitor_sessions: boolean;
   anti_afk: boolean;
+  auto_rejoin: boolean;
+  close_to_tray: boolean;
   theme: Theme;
   custom_themes: Theme[];
 };
@@ -116,6 +146,8 @@ export const api = {
   setSessionMonitor: (enabled: boolean) => invoke<Prefs>("session_monitor_set", { enabled }),
   antiAfk: () => invoke<boolean>("anti_afk_get"),
   setAntiAfk: (enabled: boolean) => invoke<boolean>("anti_afk_set", { enabled }),
+  setAutoRejoin: (enabled: boolean) => invoke<Prefs>("auto_rejoin_set", { enabled }),
+  setCloseToTray: (enabled: boolean) => invoke<Prefs>("close_to_tray_set", { enabled }),
   update: (id: string, note: string, tags: string[]) =>
     invoke<Account>("account_update", { id, note, tags }),
   remove: (id: string) => invoke<Account[]>("account_remove", { id }),
@@ -123,8 +155,10 @@ export const api = {
   /** Swaps in a fresh cookie for an existing account, keeping its settings. */
   recookie: (id: string, cookie: string) =>
     invoke<Account>("account_recookie", { id, cookie }),
-  launch: (id: string, placeId: number | null) =>
-    invoke<string>("launch_account", { id, placeId }),
+  /** `jobId` joins one named server instead of any server with room. */
+  launch: (id: string, placeId: number | null, jobId?: string | null) =>
+    invoke<string>("launch_account", { id, placeId, jobId: jobId ?? null }),
+  servers: (placeId: number) => invoke<GameServer[]>("server_list", { placeId }),
   saveLaunchConfig: (id: string, config: LaunchConfig) =>
     invoke<Account>("account_launch_config_set", {
       id,
@@ -138,6 +172,13 @@ export const api = {
   placeLookup: (placeId: number) => invoke<PlaceInfo>("place_lookup", { placeId }),
   clients: () => invoke<ClientWindow[]>("clients_list"),
   clientFocus: (hwnd: number) => invoke<void>("client_focus", { hwnd }),
+  tileClients: (size: "normal" | "micro" = "normal") =>
+    invoke<number>("tile_clients", { size }),
+  /** Tiles only these windows, leaving every other client untouched. */
+  tileGroup: (hwnds: number[], size: "normal" | "micro" = "normal") =>
+    invoke<number>("tile_client_group", { hwnds, size }),
+  minimizeClients: () => invoke<number>("minimize_clients"),
+  restoreClients: () => invoke<number>("restore_clients"),
   protocol: () => invoke<boolean>("roblox_protocol"),
   multiInstance: () => invoke<boolean>("multi_instance_get"),
   setMultiInstance: (enabled: boolean) =>
@@ -154,6 +195,9 @@ export const api = {
   friendAccept: (id: string, userId: number) => invoke<void>("friend_accept", { id, userId }),
   friendDecline: (id: string, userId: number) => invoke<void>("friend_decline", { id, userId }),
   friendSend: (id: string, username: string) => invoke<string>("friend_send", { id, username }),
+  backupExport: (path: string) => invoke<BackupExport>("backup_export", { path }),
+  backupImport: (path: string, password: string | null) =>
+    invoke<BackupImport>("backup_import", { path, password }),
 };
 
 /** Tauri rejects with a plain string; anything else is unexpected. */

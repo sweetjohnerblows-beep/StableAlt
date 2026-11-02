@@ -15,7 +15,7 @@ and no sign-in.
 
 ## Install
 
-1. Download **`StableAlt_0.1.0_x64-setup.exe`** from the link above.
+1. Download **`StableAlt_0.2.0_x64-setup.exe`** from the link above.
 2. Windows will show **"Windows protected your PC"**. That is because this build has no paid code
    signing certificate, not because anything was detected. Click **More info → Run anyway**.
 3. Pick a master password. That password encrypts your vault and is never sent anywhere — if you
@@ -24,7 +24,7 @@ and no sign-in.
 Check what you downloaded if you want to be sure it is the file I built:
 
 ```bash
-sha256sum StableAlt_0.1.0_x64-setup.exe
+sha256sum StableAlt_0.2.0_x64-setup.exe
 # compare against SHA256SUMS.txt on the release page
 ```
 

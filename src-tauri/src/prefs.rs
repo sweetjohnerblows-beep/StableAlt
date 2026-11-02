@@ -72,6 +72,11 @@ pub struct Prefs {
     pub monitor_sessions: bool,
     /// Poke idle clients so Roblox doesn't kick them for being away.
     pub anti_afk: bool,
+    /// Open a client again in the same game when it closes or crashes.
+    pub auto_rejoin: bool,
+    /// Closing the window hides it to the tray instead of quitting, so the
+    /// background work carries on.
+    pub close_to_tray: bool,
     /// The colour scheme in use.
     pub theme: Theme,
     /// Themes the user built themselves, in the order they were saved.
@@ -87,6 +92,8 @@ impl Default for Prefs {
             fps_cap: Some(60),
             monitor_sessions: true,
             anti_afk: false,
+            auto_rejoin: true,
+            close_to_tray: true,
             theme: Theme::default(),
             custom_themes: Vec::new(),
         }

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" fill="none">
+  <!-- A circlular plate so the light mark survives a light Windows taskbar;
+       the corners stay transparent because Windows composites the icon itself. -->
+  <circle cx="512" cy="512" r="512" fill="#0f1116" />
+  <circle cx="512" cy="512" r="496" stroke="#262c38" stroke-width="14" />
+
+  <!-- The archway, centred inside the circle. -->
+  <path d="M192 832V512a320 320 0 0 1 640 0v320Z" fill="#e9ecf2" />
+  <path d="M389 832V571a123 123 0 0 1 246 0v261Z" fill="#8b7cff" />
+</svg>

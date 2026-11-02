@@ -11,6 +11,7 @@ use reqwest::header::{
 };
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
@@ -86,12 +87,43 @@ struct ThumbnailItem {
 }
 
 pub fn client() -> Result<Client, String> {
-    Client::builder()
+    // One client for the whole app: it keeps the TLS session and the connection
+    // pool warm, so a launch no longer pays for a fresh runtime and handshake.
+    // Cloning is cheap — every clone shares the same pool.
+    static SHARED: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = SHARED.get() {
+        return Ok(client.clone());
+    }
+
+    let built = Client::builder()
         .user_agent(UA)
         .timeout(Duration::from_secs(25))
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Could not start HTTP client: {e}"))
+        .map_err(|e| format!("Could not start HTTP client: {e}"))?;
+    Ok(SHARED.get_or_init(|| built).clone())
+}
+
+/// Turns a `send()` failure into something worth reading.
+///
+/// `reqwest` only says `error sending request for url (…)`. Whether the lookup
+/// failed, the connect timed out or the socket was reset is a different story,
+/// and it is the difference between "your connection dropped" and "your cookie
+/// is bad" — which is exactly the wrong guess to make here.
+fn transport_failure(error: &reqwest::Error) -> String {
+    let reason = if error.is_timeout() {
+        "the connection timed out"
+    } else if error.is_connect() {
+        "the connection could not be opened"
+    } else if error.is_body() || error.is_decode() {
+        "the connection dropped mid-answer"
+    } else {
+        "the connection dropped"
+    };
+
+    format!(
+        "Could not reach Roblox: {reason}. Nothing is wrong with the account — check your connection (a VPN, proxy or firewall can block these requests) and try again."
+    )
 }
 
 fn cookie_header(cookie: &str) -> String {
@@ -155,7 +187,7 @@ pub fn fetch_session(client: &Client, cookie: &str) -> Result<SessionInfo, Strin
         .get(AUTHED_USER)
         .headers(auth_headers(cookie)?)
         .send()
-        .map_err(|e| format!("Could not reach Roblox: {e}"))?;
+        .map_err(|e| transport_failure(&e))?;
 
     let rotated = rotated_cookie(resp.headers());
     let status = resp.status().as_u16();
@@ -316,6 +348,12 @@ fn session_alive(client: &Client, cookie: &str) -> bool {
 /// re-add an account that is actually fine.
 ///
 /// Nothing secret is ever logged: only the HTTP status and Roblox's message.
+/// Roblox refusing a request is a decision; a connection failure is not. Two
+/// extra attempts ride out a dropped Wi-Fi hop, a resolver hiccup or a socket
+/// the machine had already half-closed, and cost nothing when the first works.
+const SEND_ATTEMPTS: u32 = 3;
+const SEND_RETRY: Duration = Duration::from_millis(700);
+
 pub fn auth_ticket(client: &Client, cookie: &str) -> Result<Ticket, TicketError> {
     let mut csrf: Option<String> = None;
     let mut failure: Option<(u16, String)> = None;
@@ -331,22 +369,49 @@ pub fn auth_ticket(client: &Client, cookie: &str) -> Result<Ticket, TicketError>
             message,
             session_dead: false,
         })?;
-        let mut request = client
-            .post(TICKET)
-            .headers(headers)
-            .header("Sec-Fetch-Site", "same-site")
-            .header("Sec-Fetch-Mode", "cors")
-            .header("Sec-Fetch-Dest", "empty")
-            .body("{}");
+        // A send error means the request never reached Roblox, so nothing about
+        // the account is in question — the launch failed on the wire, not on the
+        // session. Retrying is safe: no ticket was minted, and Roblox simply
+        // expires a ticket that is never used.
+        let mut failed: Option<reqwest::Error> = None;
+        let mut response = None;
+        for attempt in 1..=SEND_ATTEMPTS {
+            let mut request = client
+                .post(TICKET)
+                .headers(headers.clone())
+                .header("Sec-Fetch-Site", "same-site")
+                .header("Sec-Fetch-Mode", "cors")
+                .header("Sec-Fetch-Dest", "empty")
+                .body("{}");
 
-        if let Some(token) = &csrf {
-            request = request.header("X-CSRF-TOKEN", token);
+            if let Some(token) = &csrf {
+                request = request.header("X-CSRF-TOKEN", token);
+            }
+
+            match request.send() {
+                Ok(ok) => {
+                    response = Some(ok);
+                    break;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "authentication-ticket: send attempt {attempt}/{SEND_ATTEMPTS} failed: {error:?}"
+                    );
+                    if attempt < SEND_ATTEMPTS {
+                        std::thread::sleep(SEND_RETRY * attempt);
+                    }
+                    failed = Some(error);
+                }
+            }
         }
 
-        let response = request.send().map_err(|e| TicketError {
-            message: format!("Could not reach Roblox: {e}"),
-            session_dead: false,
-        })?;
+        let Some(response) = response else {
+            let error = failed.expect("a failed send leaves its error behind");
+            return Err(TicketError {
+                message: transport_failure(&error),
+                session_dead: false,
+            });
+        };
 
         let status = response.status().as_u16();
         let issued_token = response
@@ -545,7 +610,7 @@ pub fn post_json(
 
         let response = request
             .send()
-            .map_err(|e| format!("Could not reach Roblox: {e}"))?;
+            .map_err(|e| transport_failure(&e))?;
         let status = response.status().as_u16();
 
         if (200..300).contains(&status) {
@@ -605,7 +670,7 @@ pub fn friend_requests(client: &Client, cookie: &str) -> Result<Vec<FriendReques
         .get(url)
         .headers(auth_headers(cookie)?)
         .send()
-        .map_err(|e| format!("Could not reach Roblox: {e}"))?;
+        .map_err(|e| transport_failure(&e))?;
 
     let status = response.status().as_u16();
     if status == 401 || status == 403 {
@@ -734,7 +799,7 @@ pub fn place_info(client: &Client, place_id: u64) -> Result<PlaceInfo, String> {
     let response = client
         .get(url)
         .send()
-        .map_err(|e| format!("Could not reach Roblox: {e}"))?;
+        .map_err(|e| transport_failure(&e))?;
     if !response.status().is_success() {
         return Err("No game is published at that place ID.".to_string());
     }
@@ -780,6 +845,79 @@ pub fn place_info(client: &Client, place_id: u64) -> Result<PlaceInfo, String> {
     })
 }
 
+/// One public server of a place, as the server picker shows it.
+#[derive(Serialize)]
+pub struct GameServer {
+    pub job_id: String,
+    pub playing: u32,
+    pub max_players: u32,
+    pub fps: Option<f32>,
+    pub ping: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ServersBody {
+    #[serde(default)]
+    data: Vec<ServerRow>,
+}
+
+/// Every field can arrive null on a quiet server, so nothing here is required
+/// except the job id — a row without one cannot be joined and is dropped.
+#[derive(Deserialize)]
+struct ServerRow {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    playing: u32,
+    #[serde(default, rename = "maxPlayers")]
+    max_players: u32,
+    #[serde(default)]
+    fps: Option<f32>,
+    #[serde(default)]
+    ping: Option<u32>,
+}
+
+/// Public servers for a place. Same endpoint roblox.com's own join page uses and
+/// no session needed, which is why the picker works before a cookie is minted.
+/// Roblox rate-limits this per IP, so a 429 is a normal answer, not a bug.
+pub fn servers(client: &Client, place_id: u64) -> Result<Vec<GameServer>, String> {
+    let url = format!("https://games.roblox.com/v2/games/{place_id}/servers/Public?limit=100");
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| transport_failure(&e))?;
+
+    match response.status().as_u16() {
+        429 => {
+            return Err(
+                "Roblox is limiting server lookups. Give it a minute, then refresh.".to_string(),
+            );
+        }
+        404 => return Ok(Vec::new()),
+        status if !(200..300).contains(&status) => {
+            return Err(format!("Roblox answered HTTP {status} for that place."));
+        }
+        _ => {}
+    }
+
+    let body = response
+        .json::<ServersBody>()
+        .map_err(|e| format!("Unexpected response from Roblox: {e}"))?;
+
+    Ok(body
+        .data
+        .into_iter()
+        .filter(|row| !row.id.is_empty())
+        .map(|row| GameServer {
+            job_id: row.id,
+            playing: row.playing,
+            max_players: row.max_players,
+            fps: row.fps,
+            ping: row.ping,
+        })
+        .collect())
+}
+
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -808,6 +946,22 @@ pub fn play_uri(ticket: &str, place_id: u64) -> String {
         "https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame\
 &placeId={place_id}&isPlayTeleport=false&browserTrackerId={}&isMobile=false",
         now_ms()
+    );
+    format!(
+        "roblox-player:1+launchmode:play+gameinfo:{ticket}+launchtime:{}+placelauncherurl:{}",
+        now_ms(),
+        pct(&launcher)
+    )
+}
+
+/// Deep link that opens the installed client straight into one server of a
+/// place. Same shape as `play_uri`, but PlaceLauncher is asked for a specific
+/// job (`RequestGameJob`) instead of any server with room.
+pub fn play_uri_job(ticket: &str, place_id: u64, job_id: &str) -> String {
+    let tracker = now_ms();
+    let launcher = format!(
+        "https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob\
+&placeId={place_id}&gameId={job_id}&isPlayJob=false&browserTrackerId={tracker}&isMobile=false"
     );
     format!(
         "roblox-player:1+launchmode:play+gameinfo:{ticket}+launchtime:{}+placelauncherurl:{}",
@@ -874,5 +1028,63 @@ pub fn protocol_registered() -> bool {
     #[cfg(not(target_os = "windows"))]
     {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{app_uri, play_uri, play_uri_job};
+
+    const JOB: &str = "ec012f3b-ba4e-4ec6-9b2a-1728e998a081";
+
+    #[test]
+    fn job_uri_asks_for_that_server() {
+        let uri = play_uri_job("ticket-value", 920587237, JOB);
+        assert!(uri.starts_with("roblox-player:1+launchmode:play+gameinfo:ticket-value+launchtime:"));
+        // The launcher URL is percent-encoded inside the URI, so decode the one
+        // parameter that decides which server the client joins.
+        let launcher = uri
+            .split("placelauncherurl:")
+            .nth(1)
+            .expect("a launcher url");
+        let decoded = decode(launcher);
+        assert!(decoded.contains("request=RequestGameJob"));
+        assert!(decoded.contains("placeId=920587237"));
+        assert!(decoded.contains(&format!("gameId={JOB}")));
+        assert!(decoded.contains("isPlayJob=false"));
+        assert!(!decoded.contains("RequestGame&"));
+    }
+
+    #[test]
+    fn place_uri_still_asks_for_any_server() {
+        let uri = play_uri("t", 1818);
+        let decoded = decode(uri.split("placelauncherurl:").nth(1).expect("a launcher url"));
+        assert!(decoded.contains("request=RequestGame&"));
+        assert!(!decoded.contains("gameId="));
+    }
+
+    #[test]
+    fn app_uri_carries_no_launcher() {
+        assert!(!app_uri("t").contains("placelauncherurl"));
+    }
+
+    /// Minimal inverse of the encoder in this file, for assertions only.
+    fn decode(input: &str) -> String {
+        let bytes = input.as_bytes();
+        let mut out = String::with_capacity(input.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("00");
+                if let Ok(value) = u8::from_str_radix(hex, 16) {
+                    out.push(value as char);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+        out
     }
 }

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, message, type Account, type LaunchConfig, type Prefs, type VaultStatus } from "./api";
 import { copyText } from "./utils";
 import { AccountDetail } from "./components/AccountDetail";
-import { AccountList } from "./components/AccountList";
+import { AccountList, SORTS, type SortKey, type StatusFilter } from "./components/AccountList";
+import { CommandPalette } from "./components/CommandPalette";
 import { AddAccountDialog } from "./components/AddAccountDialog";
 import { BatchLaunchDialog, type QueueItem } from "./components/BatchLaunchDialog";
 import { BulkImportDialog } from "./components/BulkImportDialog";
@@ -24,11 +25,42 @@ const byName = (a: Account, b: Account) =>
     sensitivity: "base",
   });
 
+// The list's order and its pins belong to this window, not to the vault: they
+// are how you like to look at the accounts, not anything about the accounts.
+const SORT_STORE = "stablealt.sort";
+const PIN_STORE = "stablealt.pinned";
+
+function readSort(): SortKey {
+  try {
+    const raw = localStorage.getItem(SORT_STORE);
+    return SORTS.some((entry) => entry.id === raw) ? (raw as SortKey) : "name";
+  } catch {
+    return "name";
+  }
+}
+
+function readPins(): Set<string> {
+  try {
+    const raw = localStorage.getItem(PIN_STORE);
+    const ids: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export default function App() {
   const [vault, setVault] = useState<VaultStatus | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [filterTag, setFilterTag] = useState<string | null>(null);
+  const [stateFilter, setStateFilter] = useState<StatusFilter>("all");
+  const [sortKey, setSortKey] = useState<SortKey>(readSort);
+  const [pinned, setPinned] = useState<Set<string>>(readPins);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [view, setView] = useState<View>("accounts");
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -47,6 +79,7 @@ export default function App() {
   const [fpsCap, setFpsCapState] = useState<number | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [queue, setQueue] = useState<QueueItem[] | null>(null);
+  const [queueTarget, setQueueTarget] = useState<string | null>(null);
   const stopRef = useRef(false);
 
   useEffect(() => {
@@ -95,6 +128,22 @@ export default function App() {
     const timer = window.setTimeout(() => setToast(null), 4200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SORT_STORE, sortKey);
+    } catch {
+      /* storage can be unavailable; the order still holds for this session */
+    }
+  }, [sortKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PIN_STORE, JSON.stringify([...pinned]));
+    } catch {
+      /* same */
+    }
+  }, [pinned]);
 
   useEffect(() => {
     if (!vault?.unlocked) return;
@@ -158,14 +207,76 @@ export default function App() {
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return accounts;
-    return accounts.filter((account) =>
-      [account.username, account.display_name, account.note, ...account.tags]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle),
-    );
-  }, [accounts, query]);
+    const needsAttention = (account: Account) =>
+      account.status === "expired" ? 0 : account.status === "unknown" ? 1 : 2;
+    const order: Record<SortKey, (a: Account, b: Account) => number> = {
+      name: byName,
+      // Newest launch first; accounts that never launched sink to the bottom.
+      launch: (a, b) => (b.last_job_at ?? "").localeCompare(a.last_job_at ?? "") || byName(a, b),
+      balance: (a, b) => (b.robux ?? -1) - (a.robux ?? -1) || byName(a, b),
+      attention: (a, b) => needsAttention(a) - needsAttention(b) || byName(a, b),
+    };
+
+    return accounts
+      .filter((account) => {
+        if (stateFilter !== "all" && account.status !== stateFilter) return false;
+        if (filterTag !== null && !account.tags.includes(filterTag)) return false;
+        if (!needle) return true;
+        return [account.username, account.display_name, account.note, ...account.tags]
+          .join(" ")
+          .toLowerCase()
+          .includes(needle);
+      })
+      .sort((a, b) => {
+        // Pinned accounts lead whatever the order is; everything else keeps it.
+        const pa = pinned.has(a.id) ? 0 : 1;
+        const pb = pinned.has(b.id) ? 0 : 1;
+        return pa !== pb ? pa - pb : order[sortKey](a, b);
+      });
+  }, [accounts, query, filterTag, stateFilter, sortKey, pinned]);
+
+  /** Every tag in the vault, most used first — the filter bar, not the editor. */
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const account of accounts) {
+      for (const tag of account.tags) {
+        const key = tag.trim();
+        if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  }, [accounts]);
+
+  const statusCounts = useMemo<Record<StatusFilter, number>>(
+    () => ({
+      all: accounts.length,
+      ok: accounts.filter((a) => a.status === "ok").length,
+      expired: accounts.filter((a) => a.status === "expired").length,
+      unknown: accounts.filter((a) => a.status === "unknown").length,
+    }),
+    [accounts],
+  );
+
+  // A tag can disappear while it is being used as a filter.
+  useEffect(() => {
+    if (filterTag !== null && !tagCounts.some((entry) => entry.tag === filterTag)) {
+      setFilterTag(null);
+    }
+  }, [filterTag, tagCounts]);
+
+  // Ctrl/Cmd+K from anywhere in the window.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const selected = accounts.find((a) => a.id === selectedId) ?? null;
   const liveCount = accounts.filter((a) => a.status === "ok").length;
@@ -263,16 +374,18 @@ export default function App() {
     }
   }
 
-  async function launch(id: string, placeId: number | null) {
+  async function launch(id: string, placeId: number | null, jobId?: string) {
     setBusy("launch");
     try {
-      await api.launch(id, placeId);
+      await api.launch(id, placeId, jobId);
       setToast({
         kind: "ok",
         text: multiInstance
-          ? placeId
-            ? `Handing place ${placeId} to a new Roblox client…`
-            : "Opening a new Roblox client…"
+          ? jobId
+            ? "Joining that server in a new Roblox client…"
+            : placeId
+              ? `Handing place ${placeId} to a new Roblox client…`
+              : "Opening a new Roblox client…"
           : "Launched — but multi-instance is off, so Windows may just focus your open client.",
       });
     } catch (err) {
@@ -346,6 +459,12 @@ export default function App() {
         next.delete(id);
         return next;
       });
+      setPinned((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setToast({ kind: "ok", text: "Account removed from the vault." });
     } catch (err) {
       setToast({ kind: "error", text: message(err) });
@@ -387,6 +506,15 @@ export default function App() {
     }
   }
 
+  function togglePin(id: string) {
+    setPinned((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   function togglePick(id: string) {
     setPicked((prev) => {
       const next = new Set(prev);
@@ -403,8 +531,16 @@ export default function App() {
     });
   }
 
-  /** Opens each account in turn, spaced out for Roblox's ticket limits. */
-  async function launchMany(ids: string[]) {
+  /**
+   * Opens each account in turn, spaced out for Roblox's ticket limits.
+   *
+   * A `target` pins every launch to one place and one server, which is how
+   * several alts end up in the same lobby instead of scattered across servers.
+   */
+  async function launchMany(
+    ids: string[],
+    target?: { placeId: number; jobId: string; label?: string },
+  ) {
     if (ids.length === 0) return;
 
     stopRef.current = false;
@@ -412,6 +548,7 @@ export default function App() {
       const account = accounts.find((a) => a.id === id);
       return { id, name: account ? `@${account.username}` : id, state: "pending" };
     });
+    setQueueTarget(target?.label ?? null);
     setQueue(items);
 
     for (let index = 0; index < items.length; index += 1) {
@@ -424,8 +561,8 @@ export default function App() {
 
       mark("launching");
       try {
-        // `null` means "whatever this account is set to join".
-        await api.launch(items[index].id, null);
+        // Without a target, `null` means "whatever this account is set to join".
+        await api.launch(items[index].id, target?.placeId ?? null, target?.jobId ?? null);
         mark("done");
       } catch (err) {
         mark("failed", message(err));
@@ -552,6 +689,42 @@ export default function App() {
     }
   }
 
+  async function toggleCloseToTray() {
+    const next = !(prefs?.close_to_tray ?? true);
+    setBusy("tray");
+    try {
+      setPrefs(await api.setCloseToTray(next));
+      setToast({
+        kind: "ok",
+        text: next
+          ? "Closing the window now keeps StableAlt in the tray."
+          : "Closing the window now quits StableAlt.",
+      });
+    } catch (err) {
+      setToast({ kind: "error", text: message(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleAutoRejoin() {
+    const next = !(prefs?.auto_rejoin ?? true);
+    setBusy("rejoin");
+    try {
+      setPrefs(await api.setAutoRejoin(next));
+      setToast({
+        kind: "ok",
+        text: next
+          ? "Auto-rejoin on — a client that closes reopens in the same game."
+          : "Auto-rejoin off — a closed client stays closed.",
+      });
+    } catch (err) {
+      setToast({ kind: "error", text: message(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function toggleAntiAfk() {
     const next = !antiAfk;
     setBusy("afk");
@@ -592,64 +765,44 @@ export default function App() {
 
   return (
     <div className="shell">
-      <aside className="rail">
-        <div className="rail-brand" aria-hidden="true">
-          <LogoMark size={36} />
+      <header className="appbar">
+        <div className="brand">
+          <LogoMark size={20} />
+          <span className="brand-name">
+            Stable<em>Alt</em>
+          </span>
         </div>
-        <nav className="rail-nav" aria-label="Sections">
+
+        <nav className="tabs" aria-label="Sections">
           <button
             type="button"
-            className={view === "accounts" ? "rail-btn active" : "rail-btn"}
+            className={view === "accounts" ? "tab active" : "tab"}
             onClick={() => setView("accounts")}
-            title="Accounts"
-            aria-label="Accounts"
-            aria-current={view === "accounts"}
+            title={`${accounts.length} saved · ${liveCount} live`}
+            aria-current={view === "accounts" ? "page" : undefined}
           >
-            <GridIcon />
+            Accounts
+            {accounts.length > 0 && <span className="tab-count">{accounts.length}</span>}
           </button>
           <button
             type="button"
-            className={view === "monitor" ? "rail-btn active" : "rail-btn"}
+            className={view === "monitor" ? "tab active" : "tab"}
             onClick={() => setView("monitor")}
-            title="Open clients"
-            aria-label="Open clients"
-            aria-current={view === "monitor"}
+            aria-current={view === "monitor" ? "page" : undefined}
           >
-            <MonitorIcon />
+            Clients
           </button>
           <button
             type="button"
-            className={view === "settings" ? "rail-btn active" : "rail-btn"}
+            className={view === "settings" ? "tab active" : "tab"}
             onClick={() => setView("settings")}
-            title="Settings"
-            aria-label="Settings"
-            aria-current={view === "settings"}
+            aria-current={view === "settings" ? "page" : undefined}
           >
-            <SlidersIcon />
+            Settings
           </button>
         </nav>
-        <div className="rail-foot">
-          <button type="button" className="rail-btn" onClick={lock} title="Lock vault" aria-label="Lock vault">
-            <LockIcon />
-          </button>
-        </div>
-      </aside>
 
-      <div className="main">
-        <header className="topbar">
-          <div className="page-title">
-            <h1>
-              {view === "accounts" ? "Accounts" : view === "monitor" ? "Clients" : "Settings"}
-            </h1>
-            <p>
-              {view === "accounts"
-                ? `${accounts.length} saved · ${liveCount} live`
-                : view === "monitor"
-                  ? "Every client you have open, with a live picture of each."
-                  : "How clients start, and what happens to your vault."}
-            </p>
-          </div>
-
+        <div className="appbar-tools">
           {view === "accounts" && (
             <>
               <div className="search">
@@ -657,57 +810,80 @@ export default function App() {
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search accounts, notes, tags"
-                  aria-label="Search accounts"
+                  placeholder="Search accounts"
+                  aria-label="Search accounts, notes and tags"
                   spellCheck={false}
                 />
+                <button
+                  type="button"
+                  className="search-key"
+                  onClick={() => setPaletteOpen(true)}
+                  title="Quick launch (Ctrl+K)"
+                >
+                  Ctrl K
+                </button>
               </div>
 
-              <div className="topbar-actions">
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={refreshAll}
+                disabled={busy === "refreshAll" || accounts.length === 0}
+              >
+                {busy === "refreshAll" ? <span className="spinner" /> : <RefreshIcon />}
+                Refresh all
+              </button>
+
+              {picked.size > 0 ? (
                 <button
-                  className="btn btn-secondary"
+                  className="btn btn-primary"
                   type="button"
-                  onClick={refreshAll}
-                  disabled={busy === "refreshAll" || accounts.length === 0}
+                  onClick={() => void launchMany([...picked])}
+                  disabled={busy !== null}
                 >
-                  {busy === "refreshAll" ? <span className="spinner" /> : <RefreshIcon />}
-                  Refresh all
+                  Launch {picked.size}
                 </button>
-                {picked.size > 0 ? (
+              ) : (
+                accounts.length > 0 && (
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-secondary"
                     type="button"
-                    onClick={() => void launchMany([...picked])}
+                    onClick={() => void launchMany(visible.map((a) => a.id))}
                     disabled={busy !== null}
+                    title="Open every account, three seconds apart"
                   >
-                    Launch {picked.size}
+                    Launch all
                   </button>
-                ) : (
-                  accounts.length > 0 && (
-                    <button
-                      className="btn btn-secondary"
-                      type="button"
-                      onClick={() => void launchMany(visible.map((a) => a.id))}
-                      disabled={busy !== null}
-                      title="Open every account, three seconds apart"
-                    >
-                      Launch all
-                    </button>
-                  )
-                )}
-                <button
-                  className={picked.size > 0 ? "btn btn-secondary" : "btn btn-primary"}
-                  type="button"
-                  onClick={() => setAddOpen(true)}
-                >
-                  <PlusIcon />
-                  Add account
-                </button>
-              </div>
+                )
+              )}
+
+              <button
+                className={picked.size > 0 ? "btn btn-secondary" : "btn btn-primary"}
+                type="button"
+                onClick={() => setAddOpen(true)}
+              >
+                <PlusIcon />
+                Add account
+              </button>
             </>
           )}
-        </header>
 
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={lock}
+            title="Lock vault"
+            aria-label="Lock vault"
+          >
+            <LockIcon />
+          </button>
+        </div>
+      </header>
+
+      <div className="main">
+        <h1 className="sr-only">
+          {view === "accounts" ? "Accounts" : view === "monitor" ? "Clients" : "Settings"}
+        </h1>
         <div className="content">
           {view === "accounts" ? (
             <div className="accounts">
@@ -719,15 +895,36 @@ export default function App() {
                 picked={picked}
                 onTogglePick={togglePick}
                 onPickAll={pickAll}
+                tags={tagCounts}
+                filterTag={filterTag}
+                onFilterTag={setFilterTag}
+                stateFilter={stateFilter}
+                onStateFilter={setStateFilter}
+                statusCounts={statusCounts}
+                sortKey={sortKey}
+                onSort={setSortKey}
+                pinned={pinned}
+                onTogglePin={togglePin}
               />
 
               {selected ? (
                 <AccountDetail
+                  // Keyed so drafts, the game editor and the server list belong to
+                  // the account on screen and cannot leak into the next one.
+                  key={selected.id}
                   account={selected}
                   busy={busy}
                   protocolOk={protocolOk}
                   onRefresh={() => refresh(selected.id)}
-                  onLaunch={(placeId) => launch(selected.id, placeId)}
+                  onLaunch={(placeId, jobId) => launch(selected.id, placeId, jobId)}
+                  pickedCount={picked.size}
+                  onJoinMany={(placeId, jobId) =>
+                    void launchMany([...picked], {
+                      placeId,
+                      jobId,
+                      label: `${selected.place_name || `Place ${placeId}`} · server ${jobId.slice(0, 8)}`,
+                    })
+                  }
                   onCopyCookie={() => copyCookie(selected.id)}
                   onOpenFriends={() => setFriendsOpen(true)}
                   onRecookie={() => setRecookieOpen(true)}
@@ -760,6 +957,10 @@ export default function App() {
             <SettingsView
               antiAfk={antiAfk}
               onToggleAntiAfk={toggleAntiAfk}
+              autoRejoin={prefs?.auto_rejoin ?? true}
+              onToggleAutoRejoin={toggleAutoRejoin}
+              closeToTray={prefs?.close_to_tray ?? true}
+              onToggleCloseToTray={toggleCloseToTray}
               multiInstance={multiInstance}
               lowMemory={lowMemory}
               monitorSessions={prefs?.monitor_sessions ?? true}
@@ -786,6 +987,10 @@ export default function App() {
               onChooseTheme={chooseTheme}
               onSaveTheme={saveTheme}
               onDeleteTheme={deleteTheme}
+              onRestored={(list) => {
+                setAccounts(list);
+                setToast({ kind: "ok", text: "Backup restored." });
+              }}
               onLock={lock}
             />
           )}
@@ -810,6 +1015,7 @@ export default function App() {
       {queue && (
         <BatchLaunchDialog
           items={queue}
+          target={queueTarget}
           running={queue.some((item) => item.state === "pending" || item.state === "launching")}
           multiInstance={multiInstance}
           onStop={() => {
@@ -817,6 +1023,7 @@ export default function App() {
           }}
           onClose={() => {
             setQueue(null);
+            setQueueTarget(null);
             setPicked(new Set());
           }}
         />
@@ -838,6 +1045,26 @@ export default function App() {
           onClose={() => setFriendsOpen(false)}
         />
       )}
+
+      <CommandPalette
+        open={paletteOpen}
+        accounts={visible}
+        busy={busy !== null}
+        onClose={() => setPaletteOpen(false)}
+        onLaunch={(id) => {
+          setPaletteOpen(false);
+          void launch(id, null);
+        }}
+        onSelect={(id) => {
+          setPaletteOpen(false);
+          setSelectedId(id);
+          setView("accounts");
+        }}
+        onView={(next) => {
+          setPaletteOpen(false);
+          setView(next);
+        }}
+      />
 
       {toast && (
         <div className={`toast ${toast.kind}`} role="status">
@@ -885,36 +1112,6 @@ function LockIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="3.2" y="7" width="9.6" height="6.4" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
       <path d="M5.6 7V5.3a2.4 2.4 0 0 1 4.8 0V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function GridIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-      <rect x="2.4" y="2.4" width="5.4" height="5.4" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="10.2" y="2.4" width="5.4" height="5.4" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="2.4" y="10.2" width="5.4" height="5.4" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="10.2" y="10.2" width="5.4" height="5.4" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
-
-function MonitorIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-      <rect x="1.9" y="2.8" width="14.2" height="9.4" rx="1.8" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M6.4 15.2h5.2M9 12.2v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function SlidersIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-      <path d="M3 5.5h12M3 12.5h12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <circle cx="7" cy="5.5" r="2" fill="var(--panel)" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="11.5" cy="12.5" r="2" fill="var(--panel)" stroke="currentColor" strokeWidth="1.4" />
     </svg>
   );
 }

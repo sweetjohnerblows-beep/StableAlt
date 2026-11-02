@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { DEFAULT_THEME, PRESETS, apply, type Theme } from "../themes";
+import { DEFAULT_THEME, PRESETS, apply, atmosphereFor, type Theme } from "../themes";
 
 type Props = {
   theme: Theme;
@@ -25,7 +25,11 @@ const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 /** A miniature of the app: page, a raised panel, and the accent. */
 function Swatch({ theme }: { theme: Theme }) {
   return (
-    <span className="swatch" style={{ background: theme.bg }} aria-hidden="true">
+    <span
+      className="swatch"
+      style={{ background: theme.bg, backgroundImage: atmosphereFor(theme) }}
+      aria-hidden="true"
+    >
       <span
         className="swatch-panel"
         style={{ background: theme.panel, borderColor: theme.line }}

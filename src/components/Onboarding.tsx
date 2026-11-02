@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LogoMark } from "./Logo";
 
 type Props = {
   /** Returns an error to show in place of dismissing the card. */
@@ -22,7 +23,7 @@ export function Onboarding({ onChoose }: Props) {
       <div className="splash-glow" />
       <div className="onboard-card">
         <div className="onboard-mark" aria-hidden="true">
-          A
+          <LogoMark size={32} />
         </div>
         <h1>Run more than one account at once?</h1>
         <p>

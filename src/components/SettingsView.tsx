@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
+import { api, message, type Account } from "../api";
 import type { Theme } from "../themes";
 import { ThemeStudio } from "./ThemeStudio";
 
@@ -17,6 +19,10 @@ type Props = {
   onToggleMonitor: () => void;
   antiAfk: boolean;
   onToggleAntiAfk: () => void;
+  autoRejoin: boolean;
+  onToggleAutoRejoin: () => void;
+  closeToTray: boolean;
+  onToggleCloseToTray: () => void;
   fpsCap: number | null;
   theme: Theme;
   customThemes: Theme[];
@@ -31,6 +37,7 @@ type Props = {
   onToggleMultiInstance: () => void;
   onToggleLowMemory: () => void;
   onSetFpsCap: (cap: number | null) => void;
+  onRestored: (accounts: Account[]) => void;
   onLock: () => void;
 };
 
@@ -67,6 +74,10 @@ export function SettingsView({
   onToggleMonitor,
   antiAfk,
   onToggleAntiAfk,
+  autoRejoin,
+  onToggleAutoRejoin,
+  closeToTray,
+  onToggleCloseToTray,
   fpsCap,
   theme,
   customThemes,
@@ -81,9 +92,88 @@ export function SettingsView({
   onToggleMultiInstance,
   onToggleLowMemory,
   onSetFpsCap,
+  onRestored,
   onLock,
 }: Props) {
   const [copied, setCopied] = useState(false);
+  const [backupBusy, setBackupBusy] = useState<"save" | "restore" | null>(null);
+  const [backupNote, setBackupNote] = useState<string | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [pendingBackup, setPendingBackup] = useState<string | null>(null);
+  const [backupPassword, setBackupPassword] = useState("");
+
+  async function saveBackup() {
+    if (backupBusy) return;
+    setBackupError(null);
+    setBackupNote(null);
+    try {
+      const day = new Date().toISOString().slice(0, 10);
+      const picked = await saveFile({
+        title: "Save a StableAlt backup",
+        defaultPath: `StableAlt-backup-${day}.savault`,
+        filters: [{ name: "StableAlt backup", extensions: ["savault"] }],
+      });
+      if (!picked) return;
+      setBackupBusy("save");
+      const result = await api.backupExport(picked);
+      setSavedPath(result.path);
+      setBackupNote(
+        `Saved ${result.accounts} account${result.accounts === 1 ? "" : "s"} — readable only with your master password.`,
+      );
+    } catch (err) {
+      setBackupError(message(err));
+    } finally {
+      setBackupBusy(null);
+    }
+  }
+
+  async function restoreBackup(path: string, password: string | null) {
+    setBackupBusy("restore");
+    try {
+      const result = await api.backupImport(path, password);
+      if (result.needs_password) {
+        setPendingBackup(path);
+        setBackupNote(null);
+        setBackupError(null);
+        return;
+      }
+      setPendingBackup(null);
+      setBackupPassword("");
+      onRestored(result.accounts);
+      setBackupNote(
+        result.added === 0
+          ? "Nothing new — every account in that backup is already here."
+          : `${result.added} account${result.added === 1 ? "" : "s"} added${
+              result.skipped > 0 ? `, ${result.skipped} already here` : ""
+            }.`,
+      );
+    } catch (err) {
+      setBackupError(message(err));
+    } finally {
+      setBackupBusy(null);
+    }
+  }
+
+  async function pickBackup() {
+    if (backupBusy) return;
+    setBackupError(null);
+    setBackupNote(null);
+    setPendingBackup(null);
+    setBackupPassword("");
+    try {
+      const picked = await openFile({
+        title: "Choose a StableAlt backup",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "StableAlt backup", extensions: ["savault", "json"] }],
+      });
+      if (!picked || Array.isArray(picked)) return;
+      await restoreBackup(picked, null);
+    } catch (err) {
+      setBackupError(message(err));
+    }
+  }
 
   async function copyPath() {
     try {
@@ -257,6 +347,61 @@ export function SettingsView({
             onToggle={onToggleAntiAfk}
           />
         </div>
+
+        <div className="setting">
+          <div className="setting-text">
+            <div className="setting-title">
+              Auto-rejoin
+              <span className={autoRejoin ? "chip ok" : "chip"}>
+                {autoRejoin ? "On" : "Off"}
+              </span>
+            </div>
+            <p>
+              A client you launched from here is watched. If its window closes — a crash, a
+              disconnect, or an accidental close — it opens again in the same game, with the same
+              ticket, graphics and frame cap as the first launch. After three failed attempts it
+              stops rather than looping.
+            </p>
+            {!autoRejoin && (
+              <p className="setting-note">
+                Only while the vault is unlocked: a launched client needs its cookie.
+              </p>
+            )}
+          </div>
+          <Switch
+            on={autoRejoin}
+            disabled={busy === "rejoin"}
+            label="Auto-rejoin"
+            onToggle={onToggleAutoRejoin}
+          />
+        </div>
+
+        <div className="setting">
+          <div className="setting-text">
+            <div className="setting-title">
+              Keep running in the tray
+              <span className={closeToTray ? "chip ok" : "chip"}>
+                {closeToTray ? "On" : "Off"}
+              </span>
+            </div>
+            <p>
+              Closing the window hides it to the notification area instead of quitting, so anti-AFK,
+              auto-rejoin and the session check keep working with nothing on screen. The tray menu
+              opens it again, toggles anti-AFK, or quits properly.
+            </p>
+            {!closeToTray && (
+              <p className="setting-note">
+                With this off, closing the window quits and every background job stops with it.
+              </p>
+            )}
+          </div>
+          <Switch
+            on={closeToTray}
+            disabled={busy === "tray"}
+            label="Keep running in the tray"
+            onToggle={onToggleCloseToTray}
+          />
+        </div>
       </section>
 
       <section className="settings-card">
@@ -290,6 +435,100 @@ export function SettingsView({
             </button>
           </div>
         </div>
+      </section>
+
+      <section className="settings-card">
+        <header className="settings-head">
+          <h2>Backup</h2>
+          <p>
+            One encrypted file with every account, its game and its options. It only opens with
+            the master password that made it — keep a copy somewhere that isn't this PC.
+          </p>
+        </header>
+
+        <div className="setting">
+          <div className="setting-text">
+            <div className="setting-title">Save a backup</div>
+            <p>
+              Writes the same encrypted envelope the vault uses, so a copy on a USB stick is as
+              safe as the vault itself.
+            </p>
+            {savedPath && backupNote && (
+              <p className="mono path" style={{ marginTop: 8 }}>
+                {savedPath}
+              </p>
+            )}
+          </div>
+          <div className="setting-actions">
+            <button
+              className="btn btn-secondary btn-sm"
+              type="button"
+              onClick={() => void saveBackup()}
+              disabled={backupBusy !== null || accountCount === 0}
+            >
+              {backupBusy === "save" ? <span className="spinner" /> : null}
+              {backupBusy === "save" ? "Saving…" : "Save backup…"}
+            </button>
+          </div>
+        </div>
+
+        <div className="setting">
+          <div className="setting-text">
+            <div className="setting-title">Restore a backup</div>
+            <p>
+              Adds the accounts from a backup into this vault. Anything already here is left alone,
+              so restoring the same file twice does nothing the second time.
+            </p>
+            {pendingBackup && (
+              <div style={{ marginTop: 12, maxWidth: 340 }}>
+                <label className="field-label" htmlFor="backup-password">
+                  That backup's master password
+                </label>
+                <input
+                  id="backup-password"
+                  className="field"
+                  type="password"
+                  autoFocus
+                  value={backupPassword}
+                  onChange={(event) => setBackupPassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && backupPassword) {
+                      void restoreBackup(pendingBackup, backupPassword);
+                    }
+                  }}
+                  disabled={backupBusy !== null}
+                />
+                <p className="hint">It was made on another PC, so it has its own password.</p>
+              </div>
+            )}
+          </div>
+          <div className="setting-actions">
+            {pendingBackup ? (
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={() => void restoreBackup(pendingBackup, backupPassword)}
+                disabled={backupBusy !== null || !backupPassword}
+              >
+                {backupBusy === "restore" ? <span className="spinner dark" /> : null}
+                Restore
+              </button>
+            ) : (
+              <button
+                className="btn btn-secondary btn-sm"
+                type="button"
+                onClick={() => void pickBackup()}
+                disabled={backupBusy !== null}
+              >
+                {backupBusy === "restore" ? <span className="spinner" /> : null}
+                {backupBusy === "restore" ? "Restoring…" : "Restore…"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {backupNote && !backupError && <p className="setting-note">{backupNote}</p>}
+        {backupError && <p className="lock-error">{backupError}</p>}
       </section>
 
       <p className="settings-foot">

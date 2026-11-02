@@ -63,6 +63,14 @@ pub struct Account {
     pub low_graphics: bool,
     #[serde(default)]
     pub fps_cap: Option<u32>,
+    /// The last server this account was sent into. Kept so a client that drops
+    /// can go back to the same lobby instead of a random one.
+    #[serde(default)]
+    pub last_place: Option<u64>,
+    #[serde(default)]
+    pub last_job: Option<String>,
+    #[serde(default)]
+    pub last_job_at: Option<String>,
 }
 
 fn yes() -> bool {
@@ -93,6 +101,9 @@ pub struct AccountView {
     pub use_global_perf: bool,
     pub low_graphics: bool,
     pub fps_cap: Option<u32>,
+    pub last_place: Option<u64>,
+    pub last_job: Option<String>,
+    pub last_job_at: Option<String>,
 }
 
 impl AccountView {
@@ -115,6 +126,9 @@ impl AccountView {
             use_global_perf: a.use_global_perf,
             low_graphics: a.low_graphics,
             fps_cap: a.fps_cap,
+            last_place: a.last_place,
+            last_job: a.last_job.clone(),
+            last_job_at: a.last_job_at.clone(),
         }
     }
 }
@@ -186,9 +200,8 @@ pub fn create(password: &str, path: &Path) -> Result<Session, String> {
     Ok(session)
 }
 
-pub fn open(password: &str, path: &Path) -> Result<Session, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|_| "No vault found on this device.".to_string())?;
+fn read_envelope(path: &Path, missing: &str) -> Result<VaultFile, String> {
+    let raw = std::fs::read_to_string(path).map_err(|_| missing.to_string())?;
     let file: VaultFile =
         serde_json::from_str(&raw).map_err(|_| "Vault file is corrupt.".to_string())?;
     if file.version != VAULT_VERSION {
@@ -197,9 +210,32 @@ pub fn open(password: &str, path: &Path) -> Result<Session, String> {
             file.version
         ));
     }
+    Ok(file)
+}
+
+pub fn open(password: &str, path: &Path) -> Result<Session, String> {
+    open_with_note(password, path, "No vault found on this device.")
+}
+
+/// Same as [`open`], but the caller decides what a missing file means — a
+/// backup that isn't there should not be reported as a missing vault.
+pub fn open_with_note(password: &str, path: &Path, missing: &str) -> Result<Session, String> {
+    let file = read_envelope(path, missing)?;
     let key = derive_key(password, &file.kdf)?;
+    decrypt(file, &key)
+}
+
+/// Re-opens an envelope with a key that is already in memory. A backup saved on
+/// this device uses the same master password, so restoring it needs no typing.
+/// Anything else fails the authentication tag and the caller asks for a password.
+pub fn open_with_key(path: &Path, key: &[u8; KEY_LEN], missing: &str) -> Result<Session, String> {
+    let file = read_envelope(path, missing)?;
+    decrypt(file, key)
+}
+
+fn decrypt(file: VaultFile, key: &[u8; KEY_LEN]) -> Result<Session, String> {
     let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|_| "Vault key is invalid.".to_string())?;
+        Aes256Gcm::new_from_slice(key).map_err(|_| "Vault key is invalid.".to_string())?;
     let nonce_bytes = B64
         .decode(&file.nonce)
         .map_err(|_| "Vault nonce is corrupt.".to_string())?;
@@ -215,10 +251,18 @@ pub fn open(password: &str, path: &Path) -> Result<Session, String> {
     let data: VaultData = serde_json::from_slice(&plaintext)
         .map_err(|_| "Vault contents are corrupt.".to_string())?;
     Ok(Session {
-        key,
+        key: *key,
         kdf: file.kdf,
         data,
     })
+}
+
+impl Session {
+    /// The derived key, so a backup made by this device can be reopened without
+    /// asking for the password again. Never leaves the process.
+    pub fn key(&self) -> &[u8; KEY_LEN] {
+        &self.key
+    }
 }
 
 pub fn save(session: &Session, path: &Path) -> Result<(), String> {

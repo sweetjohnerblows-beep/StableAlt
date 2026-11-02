@@ -9,6 +9,8 @@ export type QueueItem = {
 
 type Props = {
   items: QueueItem[];
+  /** The server every launch in this run is pinned to, when there is one. */
+  target?: string | null;
   running: boolean;
   multiInstance: boolean;
   onStop: () => void;
@@ -22,7 +24,7 @@ const LABEL: Record<QueueItem["state"], string> = {
   failed: "Failed",
 };
 
-export function BatchLaunchDialog({ items, running, multiInstance, onStop, onClose }: Props) {
+export function BatchLaunchDialog({ items, target, running, multiInstance, onStop, onClose }: Props) {
   const done = items.filter((i) => i.state === "done").length;
   const failed = items.filter((i) => i.state === "failed").length;
 
@@ -50,6 +52,7 @@ export function BatchLaunchDialog({ items, running, multiInstance, onStop, onClo
                 ? "Three seconds apart, so Roblox doesn't rate-limit the tickets."
                 : `${done} launched${failed > 0 ? ` · ${failed} failed` : ""}.`}
             </p>
+            {target && <p className="batch-target">All into {target}</p>}
           </div>
           <button className="icon-btn" type="button" onClick={onClose} disabled={running} aria-label="Close">
             ✕

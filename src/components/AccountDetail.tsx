@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, message, type Account, type LaunchConfig } from "../api";
+import { api, message, type Account, type GameServer, type LaunchConfig } from "../api";
 import { formatDate, formatRobux, parsePlaceId, timeAgo } from "../utils";
 import { Avatar } from "./Avatar";
 
@@ -10,7 +10,10 @@ type Props = {
   busy: string | null;
   protocolOk: boolean;
   onRefresh: () => void;
-  onLaunch: (placeId: number | null) => void;
+  onLaunch: (placeId: number | null, jobId?: string) => void;
+  /** How many accounts are ticked in the list, so a server can take all of them. */
+  pickedCount: number;
+  onJoinMany: (placeId: number, jobId: string) => void;
   onCopyCookie: () => void;
   onOpenFriends: () => void;
   onRecookie: () => void;
@@ -60,6 +63,8 @@ export function AccountDetail({
   protocolOk,
   onRefresh,
   onLaunch,
+  pickedCount,
+  onJoinMany,
   onCopyCookie,
   onOpenFriends,
   onRecookie,
@@ -77,6 +82,11 @@ export function AccountDetail({
   const [savingGame, setSavingGame] = useState(false);
   const [savingOptions, setSavingOptions] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [serversOpen, setServersOpen] = useState(false);
+  const [servers, setServers] = useState<GameServer[] | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [loadingServers, setLoadingServers] = useState(false);
+  const [joiningJob, setJoiningJob] = useState<string | null>(null);
 
   useEffect(() => {
     setEditing(false);
@@ -162,6 +172,50 @@ export function AccountDetail({
     }
   }
 
+  /**
+   * Opens the server picker and loads the place's public servers.
+   * Roblox rate-limits this endpoint, so a failure is shown in place and the
+   * previous rows are kept rather than blanked out.
+   */
+  async function loadServers() {
+    const place = account.place_id;
+    if (place === null) return;
+    setLoadingServers(true);
+    setServerError(null);
+    try {
+      const list = await api.servers(place);
+      // Room first, then quietest — the two reasons anyone opens this list.
+      list.sort((a, b) => {
+        const roomA = a.playing < a.max_players ? 0 : 1;
+        const roomB = b.playing < b.max_players ? 0 : 1;
+        return roomA - roomB || a.playing - b.playing;
+      });
+      setServers(list);
+    } catch (err) {
+      setServerError(message(err));
+    } finally {
+      setLoadingServers(false);
+    }
+  }
+
+  function toggleServers() {
+    const next = !serversOpen;
+    setServersOpen(next);
+    if (next && servers === null) void loadServers();
+  }
+
+  async function joinServer(server: GameServer) {
+    if (account.place_id === null) return;
+    setJoiningJob(server.job_id);
+    try {
+      onLaunch(account.place_id, server.job_id);
+    } finally {
+      // The client takes a couple of seconds to appear; the row clears as soon
+      // as the launch URL has been handed to Windows.
+      window.setTimeout(() => setJoiningJob(null), 1500);
+    }
+  }
+
   return (
     <section className="detail">
       <header className="detail-head">
@@ -199,6 +253,20 @@ export function AccountDetail({
           {launching ? <span className="spinner dark" /> : null}
           {launching ? "Opening…" : "Launch Roblox"}
         </button>
+        {account.last_job && account.last_place !== null && (
+          <button
+            className="btn btn-secondary"
+            type="button"
+            onClick={() => onLaunch(account.last_place, account.last_job ?? undefined)}
+            disabled={launching}
+            title={`Back into the server this account was last in — ${account.last_job.slice(
+              0,
+              8,
+            )}${account.last_job_at ? `, ${timeAgo(account.last_job_at)}` : ""}`}
+          >
+            Rejoin server
+          </button>
+        )}
         <button className="btn btn-secondary" type="button" onClick={onOpenFriends}>
           Friends
         </button>
@@ -336,6 +404,107 @@ export function AccountDetail({
           </div>
         )}
       </div>
+
+      {account.place_id && (
+        <div className="section">
+          <div className="section-head">
+            <h3>Servers</h3>
+            <div className="section-tools">
+              {serversOpen && (
+                <span className="section-tag">
+                  {servers === null ? "…" : `${servers.length} public`}
+                </span>
+              )}
+              {serversOpen && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  type="button"
+                  onClick={() => void loadServers()}
+                  disabled={loadingServers}
+                >
+                  {loadingServers ? "Refreshing…" : "Refresh"}
+                </button>
+              )}
+              <button className="btn btn-ghost btn-sm" type="button" onClick={toggleServers}>
+                {serversOpen ? "Hide" : "Browse servers"}
+              </button>
+            </div>
+          </div>
+
+          {serversOpen && (
+            <>
+              <p className="hint hint-block">
+                Join a specific one and this account lands in that same server — with friends, or
+                with your own alts, one after another. Tick accounts in the list and the ×N button
+                sends every one of them into the same server.
+              </p>
+
+              {serverError && <div className="callout">{serverError}</div>}
+
+              {loadingServers && servers === null && (
+                <div className="server-empty">
+                  <span className="spinner" />
+                  Asking Roblox for this place's servers…
+                </div>
+              )}
+
+              {servers !== null && servers.length === 0 && !serverError && (
+                <div className="server-empty">
+                  No public servers right now. Roblox only lists servers it can advertise, so a
+                  private or limited game shows nothing here.
+                </div>
+              )}
+
+              {servers !== null && servers.length > 0 && (
+                <ul className="server-list">
+                  {servers.map((server) => {
+                    const full = server.playing >= server.max_players;
+                    const share = server.max_players
+                      ? Math.min(100, Math.round((server.playing / server.max_players) * 100))
+                      : 0;
+                    return (
+                      <li key={server.job_id} className={full ? "server-row full" : "server-row"}>
+                        <span className="server-fill" style={{ width: `${share}%` }} aria-hidden="true" />
+                        <span className="server-players">
+                          <strong>{server.playing}</strong>
+                          <span>/{server.max_players}</span>
+                        </span>
+                        <span className="server-meta">
+                          {server.ping !== null && <span>{server.ping} ms</span>}
+                          {server.fps !== null && <span>{Math.round(server.fps)} fps</span>}
+                          {full && <span className="server-full-tag">Full</span>}
+                        </span>
+                        <span className="server-job" title={server.job_id}>
+                          {server.job_id.slice(0, 8)}
+                        </span>
+                        {pickedCount > 1 && (
+                          <button
+                            className="btn btn-ghost btn-sm server-many"
+                            type="button"
+                            onClick={() => onJoinMany(account.place_id!, server.job_id)}
+                            disabled={launching || joiningJob !== null}
+                            title={`Join this server with ${pickedCount} selected account${pickedCount === 1 ? "" : "s"} — three seconds apart`}
+                          >
+                            ×{pickedCount}
+                          </button>
+                        )}
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          type="button"
+                          onClick={() => void joinServer(server)}
+                          disabled={launching || joiningJob !== null}
+                        >
+                          {joiningJob === server.job_id ? "Joining…" : full ? "Try" : "Join"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="section">
         <div className="section-head">
